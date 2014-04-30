@@ -9,8 +9,8 @@ import collections
 
 import bs4
 
-# http://stackoverflow.com/questions/1254454/fastest-way-to-convert-a-dicts-keys-values-from-unicode-to-str
 def convert(data):
+    # http://stackoverflow.com/questions/1254454/fastest-way-to-convert-a-dicts-keys-values-from-unicode-to-str
     if isinstance(data, basestring):
         return str(data)
     elif isinstance(data, collections.Mapping):
@@ -26,10 +26,17 @@ class BF4Session(object):
         self.cj = cookielib.LWPCookieJar()
         self.br.set_cookiejar(self.cj)
 
-        if os.path.exists('mycookie.txt'):
-            self.cj.load('mycookie.txt', ignore_expires=True, ignore_discard=True)
+        if os.path.exists('cache/mycookie.txt'):
+            self.cj.load('cache/mycookie.txt', ignore_expires=True, ignore_discard=True)
 
         self.ensure_session()
+        self.save()
+
+        self.guid = None
+        try:
+            os.mkdir('cache')
+        except:
+            pass
 
     def load_assets(self):
         self.get_personas()
@@ -46,7 +53,16 @@ class BF4Session(object):
 
         for i in soup.find_all('script'):
             if i.attrs.get('src', False) and i.attrs['src'].endswith('en_US.js'):
-                r = self.br.open('http:' + i.attrs['src'])
+                filename = i.attrs['src'].split('/')[-1]
+                d = None
+                if not os.path.exists('cache/' + filename):
+                    print 'loading new cache', filename
+                    r = self.br.open('http:' + i.attrs['src'])
+                    f = open('cache/' + filename, 'w')
+                    f.write(r.read())
+                    f.close()
+                
+                r = open('cache/' + filename)
                 d = r.read()
 
                 for j in d.split('\n'):
@@ -61,18 +77,26 @@ class BF4Session(object):
                     self.data_version = match.groups()[0]
                     print 'version', self.data_version
 
-        response = self.br.open('http://eaassets-a.akamaihd.net/bl-cdn/cdnprefix/%s/public/gamedatawarsaw/warsaw.loadout.js' % self.data_version)
-        data = response.read().strip()
+        if not os.path.exists('cache/%s_warsaw.loadout.js' % self.data_version):
+            print 'new warsaw'
+            response = self.br.open('http://eaassets-a.akamaihd.net/bl-cdn/cdnprefix/%s/public/gamedatawarsaw/warsaw.loadout.js' % self.data_version)
+            data = response.read().strip()
+            f = open('cache/%s_warsaw.loadout.js' % self.data_version, 'w')
+            f.write(data)
+            f.close()
+
+        data = open('cache/%s_warsaw.loadout.js' % self.data_version).read()
+
         start_data = "game_data = "
         start = data.find(start_data) + len(start_data)
         gamedata = data[start:]
         self.gamedata = json.loads(gamedata)
 
-        f = open('game_data_%s.json' % self.data_version, 'w')
+        f = open('cache/game_data_%s.json' % self.data_version, 'w')
         f.write(pprint.pformat(self.gamedata))
         f.close()
 
-        f = open('assets_%s.json' % self.data_version, 'w')
+        f = open('cache/assets_%s.json' % self.data_version, 'w')
         f.write(pprint.pformat(self.assets))
         f.close()
 
@@ -84,7 +108,7 @@ class BF4Session(object):
         (self.post_checksum, ) = comp.search(data).groups()
 
     def save(self):
-        self.cj.save('mycookie.txt', ignore_discard=True)
+        self.cj.save('cache/mycookie.txt', ignore_discard=True)
 
     def login(self):
         print 'loggin in'
@@ -100,6 +124,8 @@ class BF4Session(object):
 
         form.set_value(authdata.get('email'), name='email')
         form.set_value(authdata.get('password'), name='password')
+
+        print 'attempting to login'
         
         self.br.form = form
         self.br.submit()
@@ -128,6 +154,32 @@ class BF4Session(object):
         self.user['is_premium'] = self.users[id][4]
 
     ##################################
+
+    def award_stats(self):
+        url = "http://battlelog.battlefield.com/bf4/warsawawardspopulate/%s/%s/" % (
+            self.user['id'],
+            self.user['platform'])
+        response = self.br.open(url)
+        data = response.read()
+        message = json.loads(data)
+        if message['message'] == 'OK':
+            return message['data']
+        else:
+            raise Exception('bad request')
+        
+    def assignment_stats(self):
+        url = "http://battlelog.battlefield.com/bf4/soldier/missionsPopulateStats/%s/%s/%s/%s/" % (
+            self.user['username'],
+            self.user['id'],
+            self.guid,
+            self.user['platform'])
+        response = self.br.open(url)
+        data = response.read()
+        message = json.loads(data)
+        if message['message'] == 'OK':
+            return message['data']
+        else:
+            raise Exception('bad request')
 
     def player_stats(self):
         response = self.br.open('http://battlelog.battlefield.com/bf4/indexstats/%s/%s/?stats=1' % (self.user['id'], self.user['platform']))
@@ -165,6 +217,24 @@ class BF4Session(object):
         else:
             raise Exception('bad request')
 
+    def detailed_stats(self):
+        response = self.br.open('http://battlelog.battlefield.com/bf4/warsawdetailedstatspopulate/%s/%s/' % (self.user['id'], self.user['platform']))
+        data = response.read()
+        message = json.loads(data)
+        if message['message'] == 'OK':
+            return message['data']
+        else:
+            raise Exception('bad request')
+
+    def weapon_stats(self):
+        response = self.br.open('http://battlelog.battlefield.com/bf4/warsawWeaponsPopulateStats/%s/%s/stats/' % (self.user['id'], self.user['platform']))
+        data = response.read()
+        message = json.loads(data)
+        if message['message'] == 'OK':
+            return message['data']
+        else:
+            raise Exception('bad request')
+
     def get_personas(self):
         response = self.br.open('http://battlelog.battlefield.com/bf4/profile/edit/edit-soldiers/')
         soup = bs4.BeautifulSoup(response.read())
@@ -193,6 +263,9 @@ class BF4Session(object):
             id = i.attrs['id'].split('-')[1]
             users[id].append(i.attrs['data-soldiergame'])
             users[id].append('premium' in i.attrs['class'])
+
+        self.guid = soup.find('section', {'id':'user'}).attrs['data-user-id']
+        print 'guid:', self.guid
         
         self.users = users
         self.set_current_user(current_user)
@@ -214,6 +287,11 @@ class BF4Session(object):
         data = urllib.urlencode(convert(p))
         response = self.br.open('http://battlelog.battlefield.com/bf4/loadout/save/', data=data)
 
+    def get_loadout(self, index):
+        l = self.get_full_loadout()
+        cl = l.get('currentLoadout')
+        return cl.get('kits')[index]
+
     def lookup(self, type, id):
         if type == 'weapon':
             return self.gamedata.get('compact', {}).get('weapons', {}).get(id, None)
@@ -221,24 +299,11 @@ class BF4Session(object):
             return self.assets.get(id, None)
 
     def search(self, id):
-        test = self.gamedata.get('compact', {}).get('weapons', {}).get(id, None)
-        if test:
-            return test
-
-        test = self.gamedata.get('compact', {}).get('kititems', {}).get(id, None)
-        if test:
-            return test
-
-        test = self.gamedata.get('compact', {}).get('appearances', {}).get(id, None)
-        if test:
-            return test
-
+        for i in ('weapons', 'kititems', 'appearances'):
+            test = self.gamedata.get('compact', {}).get(i, {}).get(id, None)
+            if test:
+                return test
         return None
-
-    def get_loadout(self, index):
-        l = self.get_full_loadout()
-        cl = l.get('currentLoadout')
-        return cl.get('kits')[index]
 
     def set_loadout(self, index, data):
         l = self.get_full_loadout()
@@ -264,13 +329,101 @@ class BF4Session(object):
         cl['weapons'][id] = value
         self.set_full_loadout(cl)
 
+    def name_to_id(self, name):
+        for i in ('weapons', 'kititems', 'appearances'):
+            test = self.gamedata.get('compact', {}).get(i, {})
+            for j in test.keys():
+                if name == test[j].get('name'):
+                    return j
+        return None
+
+    def unlocked_weapons(self):
+        return self.get_full_loadout().get('currentLoadout', {}).get('weapons', {}).keys()
+    
+    def unlock_list(self):
+        loadout = self.get_full_loadout()
+        available_weapons = self.unlocked_weapons()
+
+        w = self.weapon_stats()
+
+        swa = w.get('selectedWeaponAccessory')
+
+        def weapon_for_guid(guid):
+            for i in w.get('mainWeaponStats'):
+                if i.get('guid') == guid:
+                    return i
+
+        unlocks = []
+        unstarted = []
+
+        for guid in swa.keys():
+            obj = swa[guid]
+
+            weapon = weapon_for_guid(guid)
+            name = weapon.get('name')
+            data = obj.get('weaponAddonUnlock').get('unlockedBy')
+
+            if data.get('actualValue') < 1.0:
+                unstarted.append([
+                        obj.get('weaponAddonUnlock').get('slug'),
+                        name,
+                        data.get('actualValue'),
+                        data.get('valueNeeded'), 
+                        weapon.get('kit'),
+                        self.name_to_id(name),
+                        x.search(self.name_to_id(name)).get('category')])
+            else:
+                unlocks.append([
+                        obj.get('weaponAddonUnlock').get('slug'),
+                        name,
+                        data.get('actualValue'),
+                        data.get('valueNeeded'),
+                        weapon.get('kit'),
+                        self.name_to_id(name),
+                        x.search(self.name_to_id(name)).get('category')])
+        
+        unlocks.sort(key=lambda x: x[3]-x[2])
+
+        return unlocks, unstarted
+
+    def award_list(self):
+        stats = self.award_stats()
+
+    def save_full(self, filename):
+        loadout = self.get_full_loadout()
+        f = open(filename, 'w')
+        f.write(json.dumps(loadout))
+        f.close()
+
+    def load_full(self, filename):
+        f = json.loads(open(filename).read())['currentLoadout']
+        self.set_full_loadout(f)
+    
+        
 if __name__ == '__main__':
     x = BF4Session()
     x.load_assets()
     x.info()
 
-    weapon1 = lambda: x.set_weapon('3313614225', [u'1761127606', u'1176728211', u'1352321170', u'3525467546', u'78238001', u'0'])
-    weapon2 = lambda: x.set_weapon('3313614225', [u'815347481', u'417382943', u'385075509', u'414305462', u'231697352', u'0'])
+    def doit():
+        unlocks, unstarted = x.unlock_list()
+        for i in unlocks:
+            print str(i[3] - i[2]).rjust(10), i
 
-    setup1 = lambda: x.set_loadout(0, [u'2942558833', u'944904529', u'2887915611', u'289218432', u'3133964300', u'3214146841', u'1549533860', u'1931300281'])
-    setup2 = lambda: x.set_loadout(0, [u'3313614225', u'944904529', u'2887915611', u'289218432', u'3133964300', u'3214146841', u'1549533860', u'1931300281'])
+        for i in unstarted:
+            print str(i[3] - i[2]).rjust(10), i
+
+    def list_assignments():
+        q = x.assignment_stats()
+        sp = q.get('allMissions')
+        keys = sp.keys()
+        keys.sort()
+        for i in keys:
+            obj = sp[i]
+            print i
+            for j in obj['criterias']:
+                if j.get('completion') < 100:
+                    print '   ', x.assets.get(j.get('originalCriteria').get('descriptionID'))
+
+
+    list_assignments()
